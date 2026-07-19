@@ -7,7 +7,9 @@ to a process entry point or an ASGI lifespan remains the caller's responsibility
 from __future__ import annotations
 
 from enum import Enum
-from threading import Condition, RLock
+import math
+from threading import Condition, RLock, Thread
+import time
 from typing import Callable, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 
@@ -31,6 +33,10 @@ class RuntimeHostLifecycleError(RuntimeError):
     """Raised when an operation conflicts with the current lifecycle state."""
 
 
+class RuntimeHostStopTimeoutError(TimeoutError, RuntimeHostLifecycleError):
+    """Raised when runtime stop does not complete within its wait bound."""
+
+
 @runtime_checkable
 class RuntimeHost(Protocol[RuntimeT_co]):
     """Contract consumed by code that hosts a runtime explicitly."""
@@ -50,8 +56,8 @@ class RuntimeHost(Protocol[RuntimeT_co]):
     def start(self) -> RuntimeT_co:
         """Start the host and return its runtime."""
 
-    def stop(self) -> None:
-        """Stop the current runtime, if one is active."""
+    def stop(self, timeout: float = 5.0) -> None:
+        """Request stop once and wait a bounded time for completion."""
 
 
 class RuntimeHostAdapter(Generic[RuntimeT]):
@@ -61,8 +67,8 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
     warm-up hook are each called at most once.  Duplicate and concurrent
     ``start`` calls share the first startup attempt, returning the same runtime
     on success or observing the same error on failure.  Start or warm-up failure
-    triggers best-effort rollback.  If shutdown fails, the runtime is retained
-    so that a later ``stop`` call can retry it.
+    triggers best-effort rollback.  Shutdown is requested at most once and runs
+    on an observable worker so every caller waits only for a bounded interval.
     """
 
     def __init__(
@@ -91,6 +97,11 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
         self._last_error: Optional[BaseException] = None
         self._startup_error: Optional[BaseException] = None
         self._start_attempted = False
+        self._stop_requested = False
+        self._stop_invoked = False
+        self._stop_thread: Optional[Thread] = None
+        self._stop_error: Optional[BaseException] = None
+        self._stop_timed_out = False
         self._lock = RLock()
         self._condition = Condition(self._lock)
 
@@ -108,6 +119,21 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
     def last_error(self) -> Optional[BaseException]:
         with self._lock:
             return self._last_error
+
+    @property
+    def stop_requested(self) -> bool:
+        with self._lock:
+            return self._stop_requested
+
+    @property
+    def stop_thread(self) -> Optional[Thread]:
+        with self._lock:
+            return self._stop_thread
+
+    @property
+    def stop_timed_out(self) -> bool:
+        with self._lock:
+            return self._stop_timed_out
 
     def start(self) -> RuntimeT:
         with self._condition:
@@ -166,10 +192,13 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
                 with self._condition:
                     self._runtime = runtime
                     self._state = RuntimeHostState.STOPPING
+                    self._stop_requested = True
+                    self._stop_invoked = True
                 try:
                     self._stop_runtime(runtime)
                 except BaseException as rollback_error:
                     retained_runtime = runtime
+                    self._stop_error = rollback_error
                     if hasattr(start_error, "add_note"):
                         start_error.add_note(
                             "runtime startup rollback failed with "
@@ -184,7 +213,11 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
             raise
 
         with self._condition:
-            self._state = RuntimeHostState.RUNNING
+            if self._stop_requested:
+                self._state = RuntimeHostState.STOPPING
+                self._begin_stop_locked(runtime)
+            else:
+                self._state = RuntimeHostState.RUNNING
             self._condition.notify_all()
             if runtime is None:  # Defensive invariant check.
                 raise RuntimeHostLifecycleError(
@@ -192,38 +225,115 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
                 )
             return runtime
 
-    def stop(self) -> None:
-        with self._lock:
-            if self._state in (
+    def stop(self, timeout: float = 5.0) -> None:
+        timeout = self._validate_timeout(timeout)
+        deadline = time.monotonic() + timeout
+
+        with self._condition:
+            self._stop_requested = True
+            while self._state in (
                 RuntimeHostState.STARTING,
                 RuntimeHostState.WARMING_UP,
-                RuntimeHostState.STOPPING,
             ):
-                raise RuntimeHostLifecycleError(
-                    f"cannot stop runtime host while it is {self._state.value}"
-                )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise self._record_stop_timeout_locked(timeout)
+                self._condition.wait(timeout=remaining)
+
+            if self._state is RuntimeHostState.NEW:
+                self._state = RuntimeHostState.STOPPED
+                self._condition.notify_all()
+                return
+            if self._state is RuntimeHostState.STOPPED:
+                return
+
             runtime = self._runtime
             if runtime is None:
                 return
-            self._state = RuntimeHostState.STOPPING
-            self._last_error = None
+            if not self._stop_invoked:
+                self._state = RuntimeHostState.STOPPING
+                self._begin_stop_locked(runtime)
+            stop_thread = self._stop_thread
 
+            if stop_thread is None:
+                while self._state is RuntimeHostState.STOPPING:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise self._record_stop_timeout_locked(timeout)
+                    self._condition.wait(timeout=remaining)
+                self._raise_stop_error_locked()
+                return
+
+        remaining = max(0.0, deadline - time.monotonic())
+        stop_thread.join(timeout=remaining)
+        if stop_thread.is_alive():
+            with self._condition:
+                raise self._record_stop_timeout_locked(timeout)
+
+        with self._condition:
+            self._raise_stop_error_locked()
+
+    def _begin_stop_locked(self, runtime: RuntimeT) -> None:
+        if self._stop_invoked:
+            return
+        self._stop_invoked = True
+
+        def stop_runtime() -> None:
+            stop_error: Optional[BaseException] = None
+            try:
+                self._stop_runtime(runtime)
+            except BaseException as error:
+                stop_error = error
+
+            with self._condition:
+                self._stop_error = stop_error
+                if stop_error is None:
+                    self._runtime = None
+                    self._state = RuntimeHostState.STOPPED
+                    if not self._stop_timed_out:
+                        self._last_error = None
+                else:
+                    self._last_error = stop_error
+                    self._state = RuntimeHostState.FAILED
+                self._condition.notify_all()
+
+        self._stop_thread = Thread(
+            target=stop_runtime,
+            name="RuntimeHostStop",
+            daemon=True,
+        )
+        self._stop_thread.start()
+
+    def _record_stop_timeout_locked(
+        self,
+        timeout: float,
+    ) -> RuntimeHostStopTimeoutError:
+        timeout_error = RuntimeHostStopTimeoutError(
+            f"runtime stop did not complete within {timeout:g} seconds"
+        )
+        self._stop_timed_out = True
+        self._last_error = timeout_error
+        return timeout_error
+
+    def _raise_stop_error_locked(self) -> None:
+        if self._stop_error is not None:
+            raise self._stop_error
+
+    @staticmethod
+    def _validate_timeout(timeout: float) -> float:
         try:
-            self._stop_runtime(runtime)
-        except BaseException as stop_error:
-            with self._lock:
-                self._last_error = stop_error
-                self._state = RuntimeHostState.FAILED
-            raise
-
-        with self._lock:
-            self._runtime = None
-            self._state = RuntimeHostState.STOPPED
+            value = float(timeout)
+        except (TypeError, ValueError) as error:
+            raise ValueError("timeout must be a finite non-negative number") from error
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("timeout must be a finite non-negative number")
+        return value
 
 
 __all__ = [
     "RuntimeHost",
     "RuntimeHostAdapter",
     "RuntimeHostLifecycleError",
+    "RuntimeHostStopTimeoutError",
     "RuntimeHostState",
 ]

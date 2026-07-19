@@ -10,6 +10,9 @@ from .runtime import ServerRuntimeFacade
 from .runtime_host import RuntimeHostAdapter, RuntimeHostLifecycleError
 
 
+DEFAULT_RUNTIME_STOP_TIMEOUT_SECONDS = 5.0
+
+
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     if app.state.runtime_lifespan_entered:
@@ -47,7 +50,11 @@ async def app_lifespan(app: FastAPI):
         yield
     finally:
         app.state.ready = False
-        runtime_host.stop()
+        try:
+            runtime_host.stop(timeout=app.state.runtime_stop_timeout_seconds)
+        except BaseException as stop_error:
+            app.state.runtime_stop_error = stop_error
+            raise
 
 
 def create_app(lan_controller: Optional[Any] = None) -> FastAPI:
@@ -58,6 +65,8 @@ def create_app(lan_controller: Optional[Any] = None) -> FastAPI:
     app.state.runtime_lifespan_entered = False
     app.state.runtime = None
     app.state.runtime_host = None
+    app.state.runtime_stop_timeout_seconds = DEFAULT_RUNTIME_STOP_TIMEOUT_SECONDS
+    app.state.runtime_stop_error = None
 
     # Bounded health/readiness endpoints
     @app.get("/health")

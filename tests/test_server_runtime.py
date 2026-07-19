@@ -1055,7 +1055,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self.assertIs(raised.exception, original_error)
                 self.assertFalse(worker.is_alive())
 
-    def test_runtime_host_shutdown_failure_can_be_retried(self):
+    def test_runtime_host_shutdown_failure_is_observable_and_not_retried(self):
         from init_tracker_server.runtime_host import (
             RuntimeHostAdapter,
             RuntimeHostLifecycleError,
@@ -1069,8 +1069,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
 
         def retryable_stop(runtime):
             stop_attempts.append(runtime.identity)
-            if len(stop_attempts) == 1:
-                raise RuntimeError("shutdown failed")
+            raise RuntimeError("shutdown failed")
 
         failed_stop_host = RuntimeHostAdapter(
             lambda: FakeRuntime(),
@@ -1087,11 +1086,108 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         with self.assertRaises(RuntimeHostLifecycleError):
             failed_stop_host.start()
 
-        failed_stop_host.stop()
-        self.assertEqual(stop_attempts, ["failed-stop", "failed-stop"])
-        self.assertIs(failed_stop_host.state, RuntimeHostState.STOPPED)
-        self.assertIsNone(failed_stop_host.runtime)
-        self.assertIsNone(failed_stop_host.last_error)
+        with self.assertRaises(RuntimeError) as duplicate_stop_error:
+            failed_stop_host.stop()
+        self.assertIs(duplicate_stop_error.exception, stop_error.exception)
+        self.assertEqual(stop_attempts, ["failed-stop"])
+        self.assertIs(failed_stop_host.state, RuntimeHostState.FAILED)
+        self.assertIs(failed_stop_host.runtime, failed_stop_runtime)
+        self.assertIs(failed_stop_host.last_error, stop_error.exception)
+
+    def test_runtime_host_stop_during_startup_is_latched_and_requested_once(self):
+        from init_tracker_server.runtime_host import RuntimeHostAdapter, RuntimeHostState
+
+        runtime = object()
+        factory_entered = threading.Event()
+        release_factory = threading.Event()
+        stop_calls = []
+        start_results = []
+        stop_errors = []
+
+        def runtime_factory():
+            factory_entered.set()
+            if not release_factory.wait(timeout=1):
+                raise AssertionError("test did not release runtime factory")
+            return runtime
+
+        host = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=lambda created_runtime: None,
+            stop_runtime=stop_calls.append,
+        )
+
+        start_thread = threading.Thread(target=lambda: start_results.append(host.start()))
+
+        def stop_host():
+            try:
+                host.stop(timeout=1)
+            except BaseException as error:
+                stop_errors.append(error)
+
+        start_thread.start()
+        self.assertTrue(factory_entered.wait(timeout=1))
+        stop_thread = threading.Thread(target=stop_host)
+        stop_thread.start()
+        deadline = time.monotonic() + 1
+        while not host.stop_requested and time.monotonic() < deadline:
+            time.sleep(0.001)
+        self.assertTrue(host.stop_requested)
+        self.assertIs(host.state, RuntimeHostState.STARTING)
+        release_factory.set()
+        start_thread.join(timeout=1)
+        stop_thread.join(timeout=1)
+
+        self.assertFalse(start_thread.is_alive())
+        self.assertFalse(stop_thread.is_alive())
+        self.assertEqual(stop_errors, [])
+        self.assertEqual(start_results, [runtime])
+        self.assertEqual(stop_calls, [runtime])
+        self.assertIs(host.state, RuntimeHostState.STOPPED)
+        self.assertIsNone(host.runtime)
+
+    def test_runtime_host_stop_timeout_keeps_worker_and_failure_observable(self):
+        from init_tracker_server.runtime_host import (
+            RuntimeHostAdapter,
+            RuntimeHostState,
+            RuntimeHostStopTimeoutError,
+        )
+
+        release_stop = threading.Event()
+        stop_entered = threading.Event()
+        stop_calls = []
+
+        def blocking_stop(runtime):
+            stop_calls.append(runtime)
+            stop_entered.set()
+            release_stop.wait(timeout=1)
+
+        runtime = object()
+        host = RuntimeHostAdapter(
+            lambda: runtime,
+            start_runtime=lambda created_runtime: None,
+            stop_runtime=blocking_stop,
+        )
+        host.start()
+
+        with self.assertRaises(RuntimeHostStopTimeoutError) as raised:
+            host.stop(timeout=0.01)
+
+        self.assertTrue(stop_entered.is_set())
+        self.assertTrue(host.stop_timed_out)
+        self.assertIs(host.last_error, raised.exception)
+        self.assertIs(host.state, RuntimeHostState.STOPPING)
+        self.assertIs(host.runtime, runtime)
+        self.assertIsNotNone(host.stop_thread)
+        self.assertTrue(host.stop_thread.is_alive())
+        self.assertEqual(stop_calls, [runtime])
+
+        release_stop.set()
+        host.stop_thread.join(timeout=1)
+        self.assertFalse(host.stop_thread.is_alive())
+        self.assertIs(host.state, RuntimeHostState.STOPPED)
+        self.assertIsNone(host.runtime)
+        host.stop(timeout=0.01)
+        self.assertEqual(stop_calls, [runtime])
 
     def test_runtime_host_lifespan_integration(self):
         import sys
@@ -1171,6 +1267,10 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             self.assertEqual(runtime.start_calls, 1)
             self.assertEqual(runtime.shutdown_calls, 1)
             self.assertFalse(app.state.ready)
+            self.assertIsNone(app.state.runtime_stop_error)
+            self.assertIsNotNone(runtime_host.stop_thread)
+            self.assertFalse(runtime_host.stop_thread.is_alive())
+            asgi_events.append(("lifespan_exited", app.state.ready))
 
             with self.assertRaisesRegex(
                 RuntimeHostLifecycleError,
@@ -1197,6 +1297,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 ("warm_up", False),
                 ("serving", True),
                 ("shutdown", False),
+                ("lifespan_exited", False),
             ],
         )
 
@@ -1260,6 +1361,54 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 ("quit", None),
             ],
         )
+
+    def test_app_lifespan_exit_surfaces_bounded_runtime_stop_timeout(self):
+        from unittest.mock import patch
+
+        from init_tracker_server.app import create_app
+        from init_tracker_server.runtime_host import (
+            RuntimeHostState,
+            RuntimeHostStopTimeoutError,
+        )
+
+        shutdown_entered = threading.Event()
+        release_shutdown = threading.Event()
+
+        class FakeRuntime:
+            def __init__(self, *, lan_controller):
+                self.lan_controller = lan_controller
+
+            def start(self):
+                return None
+
+            def shutdown(self):
+                shutdown_entered.set()
+                release_shutdown.wait(timeout=1)
+
+        app = create_app(lan_controller=None)
+        app.state.runtime_stop_timeout_seconds = 0.01
+
+        async def exercise_lifespan_timeout():
+            with self.assertRaises(RuntimeHostStopTimeoutError) as raised:
+                async with app.router.lifespan_context(app):
+                    self.assertTrue(app.state.ready)
+            self.assertFalse(app.state.ready)
+            self.assertIs(app.state.runtime_stop_error, raised.exception)
+
+        with patch("init_tracker_server.app.ServerRuntimeFacade", FakeRuntime):
+            asyncio.run(exercise_lifespan_timeout())
+
+        runtime_host = app.state.runtime_host
+        self.assertTrue(shutdown_entered.is_set())
+        self.assertIs(runtime_host.state, RuntimeHostState.STOPPING)
+        self.assertTrue(runtime_host.stop_timed_out)
+        self.assertIsNotNone(runtime_host.stop_thread)
+        self.assertTrue(runtime_host.stop_thread.is_alive())
+
+        release_shutdown.set()
+        runtime_host.stop_thread.join(timeout=1)
+        self.assertFalse(runtime_host.stop_thread.is_alive())
+        self.assertIs(runtime_host.state, RuntimeHostState.STOPPED)
 
     def test_lan_controller_warm_up_preserves_seed_and_fallback_outputs(self):
         from dnd_initative_tracker import LanController
