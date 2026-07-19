@@ -1256,6 +1256,119 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
         host.stop(timeout=0.01)
         self.assertEqual(stop_calls, [runtime])
 
+    def test_headless_runtime_host_readiness_failure_rolls_back_once(self):
+        from init_tracker_server.runtime_host import HeadlessRuntimeHost, RuntimeHostState
+
+        readiness_error = RuntimeError("server readiness failed")
+        events = []
+
+        class FailingLan:
+            def start(self, quiet=False):
+                events.append(("lan.start", quiet))
+
+            def wait_until_ready(self, timeout):
+                events.append(("lan.wait_until_ready", timeout))
+                raise readiness_error
+
+            def stop(self):
+                events.append(("lan.stop", None))
+
+            def join(self, timeout):
+                events.append(("lan.join", timeout))
+
+        class FakeHeadlessRuntime:
+            def __init__(self):
+                events.append(("construct", None))
+                self._lan = FailingLan()
+                self.mainloop_entered = threading.Event()
+
+            def mainloop(self):
+                events.append(("mainloop", None))
+                self.mainloop_entered.set()
+
+            def after(self, _delay_ms, callback):
+                self_test.assertTrue(self.mainloop_entered.wait(timeout=1))
+                callback()
+
+            def quit(self):
+                events.append(("quit", None))
+
+        self_test = self
+        host = HeadlessRuntimeHost(
+            FakeHeadlessRuntime,
+            prepare_runtime=lambda _runtime: events.append(("prepare", None)),
+            server_ready_timeout=0.25,
+            server_stop_timeout=0.5,
+        )
+
+        with self.assertRaises(RuntimeError) as raised:
+            host.start()
+
+        self.assertIs(raised.exception, readiness_error)
+        self.assertIs(host.last_error, readiness_error)
+        self.assertIs(host.state, RuntimeHostState.FAILED)
+        self.assertIsNone(host.runtime)
+        self.assertEqual(
+            events,
+            [
+                ("construct", None),
+                ("prepare", None),
+                ("mainloop", None),
+                ("lan.start", True),
+                ("lan.wait_until_ready", 0.25),
+                ("lan.stop", None),
+                ("lan.join", 0.5),
+                ("quit", None),
+            ],
+        )
+
+    def test_lan_controller_stop_and_readiness_delegate_to_owned_server_host(self):
+        from dnd_initative_tracker import LanController
+
+        class FakeServerHost:
+            def __init__(self):
+                self.calls = []
+
+            def wait_until_ready(self, timeout):
+                self.calls.append(("wait_until_ready", timeout))
+
+            def stop(self, timeout):
+                self.calls.append(("stop", timeout))
+
+            def request_stop(self):
+                self.calls.append(("request_stop", None))
+
+            def wait(self, timeout):
+                self.calls.append(("wait", timeout))
+
+        class FakeTracker:
+            def __init__(self):
+                self.logs = []
+
+            def _oplog(self, message):
+                self.logs.append(message)
+
+        controller = object.__new__(LanController)
+        controller._tracker = FakeTracker()
+        controller._server_host = FakeServerHost()
+        controller._uvicorn_server = None
+        controller._polling = True
+
+        controller.wait_until_ready(timeout=0.25)
+        controller.stop()
+        controller.join(timeout=0.5)
+
+        self.assertFalse(controller._polling)
+        self.assertEqual(
+            controller._server_host.calls,
+            [
+                ("wait_until_ready", 0.25),
+                ("request_stop", None),
+                ("wait", 0.5),
+            ],
+        )
+        self.assertEqual(len(controller.app.logs), 1)
+
     def test_runtime_host_lifespan_integration(self):
         import sys
         from types import SimpleNamespace
@@ -1263,6 +1376,7 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
 
         from init_tracker_server.app import create_app
         from init_tracker_server.runtime_host import (
+            HeadlessRuntimeHost,
             RuntimeHostAdapter,
             RuntimeHostLifecycleError,
             RuntimeHostState,
@@ -1383,18 +1497,36 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
                 self._polling = True
 
             def _best_lan_url(self):
-                return "http://127.0.0.1:8000/"
+                return f"http://{self.cfg.host}:{self.cfg.port}/"
+
+            def start(self, quiet=False):
+                headless_events.append(
+                    ("lan.start", quiet, self.cfg.host, self.cfg.port)
+                )
+
+            def wait_until_ready(self, timeout):
+                headless_events.append(("lan.wait_until_ready", timeout))
 
             def stop(self):
-                headless_events.append(("lan.stop", self._polling))
+                self._polling = False
+                headless_events.append(("lan.stop", None))
+
+            def join(self, timeout):
+                headless_events.append(("lan.join", timeout))
 
         class FakeHeadlessRuntime:
-            def __init__(self):
-                headless_events.append(("construct", None))
+            def __init__(self, *, auto_start_lan=None):
+                headless_events.append(("construct", auto_start_lan))
                 self._lan = FakeLan()
+                self.mainloop_entered = threading.Event()
 
             def mainloop(self):
                 headless_events.append(("mainloop", None))
+                self.mainloop_entered.set()
+
+            def after(self, _delay_ms, callback):
+                self_test.assertTrue(self.mainloop_entered.wait(timeout=1))
+                callback()
 
             def quit(self):
                 headless_events.append(("quit", None))
@@ -1403,34 +1535,58 @@ class ServerRuntimeFacadeTests(unittest.TestCase):
             InitiativeTracker=FakeHeadlessRuntime,
             POC_AUTO_START_LAN=True,
         )
-        real_runtime_host_adapter = RuntimeHostAdapter
+        real_headless_runtime_host = HeadlessRuntimeHost
 
-        def recording_runtime_host_adapter(*args, **kwargs):
-            host = real_runtime_host_adapter(*args, **kwargs)
+        def recording_headless_runtime_host(*args, **kwargs):
+            host = real_headless_runtime_host(*args, **kwargs)
             created_hosts.append(host)
             return host
 
         with (
             patch.dict(os.environ, {}, clear=False),
             patch.dict(sys.modules, {"dnd_initative_tracker": fake_tracker_module}),
-            patch.object(serve_headless, "RuntimeHostAdapter", recording_runtime_host_adapter),
+            patch.object(
+                serve_headless,
+                "HeadlessRuntimeHost",
+                recording_headless_runtime_host,
+            ),
             patch.object(serve_headless.runtime_cfg, "ensure_dirs"),
             patch.object(serve_headless, "configure_debug_trace"),
             patch.object(serve_headless.signal, "signal"),
         ):
-            result = serve_headless.main(["--no-auto-lan", "--no-debugging"])
+            first_result = serve_headless.main(["--no-auto-lan", "--no-debugging"])
+            second_result = serve_headless.main(
+                [
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "18802",
+                    "--no-debugging",
+                ]
+            )
 
-        self.assertEqual(result, 0)
-        self.assertFalse(fake_tracker_module.POC_AUTO_START_LAN)
-        self.assertEqual(len(created_hosts), 1)
-        self.assertIs(created_hosts[0].state, RuntimeHostState.STOPPED)
-        self.assertIsNone(created_hosts[0].runtime)
+        self.assertEqual((first_result, second_result), (0, 0))
+        self.assertTrue(fake_tracker_module.POC_AUTO_START_LAN)
+        self.assertEqual(len(created_hosts), 2)
+        for host in created_hosts:
+            self.assertIs(host.state, RuntimeHostState.STOPPED)
+            self.assertIsNone(host.runtime)
+            self.assertIsNotNone(host.stop_thread)
+            self.assertFalse(host.stop_thread.is_alive())
         self.assertEqual(
             headless_events,
             [
-                ("construct", None),
+                ("construct", False),
                 ("mainloop", None),
-                ("lan.stop", False),
+                ("lan.stop", None),
+                ("lan.join", 5.0),
+                ("quit", None),
+                ("construct", False),
+                ("mainloop", None),
+                ("lan.start", True, "0.0.0.0", 18802),
+                ("lan.wait_until_ready", 60.0),
+                ("lan.stop", None),
+                ("lan.join", 5.0),
                 ("quit", None),
             ],
         )

@@ -133,6 +133,29 @@ class ServerHostTests(unittest.TestCase):
         self.assertEqual(server.serve_calls, 1)
         self.assertEqual(loop.ran_until_complete, "serve-result")
 
+    def test_wait_until_ready_observes_registered_lifespan_probe(self):
+        loop = FakeLoop()
+        ready = {"value": False}
+
+        with (
+            patch.dict(sys.modules, {"uvicorn": self.fake_uvicorn}),
+            patch.object(host_module.asyncio, "new_event_loop", return_value=loop),
+            patch.object(host_module.asyncio, "set_event_loop"),
+            patch.object(host_module.threading, "Thread", FakeThread),
+        ):
+            server_host = UvicornServerHost(
+                object(),
+                host="127.0.0.1",
+                port=18801,
+                ready_check=lambda: ready["value"],
+                on_server_ready=lambda _loop, _server: ready.update(value=True),
+            )
+            server_host.start()
+            server_host.wait_until_ready(timeout=0.25)
+
+        self.assertTrue(ready["value"])
+        self.assertIsNone(server_host.last_error)
+
     def test_start_reuses_existing_live_thread(self):
         app = object()
         loop = FakeLoop()
@@ -335,11 +358,19 @@ class ServerHostTests(unittest.TestCase):
             patch.object(host_module.asyncio, "set_event_loop"),
             patch.object(host_module.threading, "Thread", FakeThread),
         ):
-            server_host = UvicornServerHost(object(), host="127.0.0.1", port=18801)
+            server_host = UvicornServerHost(
+                object(),
+                host="127.0.0.1",
+                port=18801,
+                ready_check=lambda: False,
+            )
             server_host.start()
+            with self.assertRaises(UvicornServerHostRuntimeError) as readiness_error:
+                server_host.wait_until_ready(timeout=0.5)
             with self.assertRaises(UvicornServerHostRuntimeError) as raised:
                 server_host.wait(timeout=0.5)
 
+        self.assertIs(readiness_error.exception.__cause__, runtime_error)
         self.assertIs(raised.exception.__cause__, runtime_error)
         self.assertIs(server_host.last_error, runtime_error)
 

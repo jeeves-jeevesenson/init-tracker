@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from enum import Enum
 import math
-from threading import Condition, RLock, Thread
+from threading import Condition, Event, RLock, Thread, current_thread
 import time
-from typing import Callable, Generic, Optional, Protocol, TypeVar, runtime_checkable
+from typing import Any, Callable, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 
 RuntimeT = TypeVar("RuntimeT")
@@ -330,7 +330,228 @@ class RuntimeHostAdapter(Generic[RuntimeT]):
         return value
 
 
+class HeadlessRuntimeHost(Generic[RuntimeT]):
+    """Own one headless tracker and its package-hosted server lifecycle.
+
+    The tracker instance is constructed with its legacy scheduled LAN auto-start
+    disabled by the caller.  This host then starts the existing LAN controller
+    once, waits for the package ASGI lifespan to publish readiness, runs the
+    headless event loop, and performs bounded server stop/join cleanup.
+    """
+
+    def __init__(
+        self,
+        runtime_factory: Callable[[], RuntimeT],
+        *,
+        prepare_runtime: Optional[Callable[[RuntimeT], None]] = None,
+        auto_start_server: bool = True,
+        server_ready_timeout: float = 60.0,
+        server_stop_timeout: float = 5.0,
+    ) -> None:
+        if prepare_runtime is not None and not callable(prepare_runtime):
+            raise TypeError("prepare_runtime must be callable")
+        self._prepare_runtime = prepare_runtime
+        self._auto_start_server = bool(auto_start_server)
+        self._server_ready_timeout = RuntimeHostAdapter._validate_timeout(
+            server_ready_timeout
+        )
+        self._server_stop_timeout = RuntimeHostAdapter._validate_timeout(
+            server_stop_timeout
+        )
+        self._mainloop_thread: Optional[Thread] = None
+        self._mainloop_entered = Event()
+        self._mainloop_ready = Event()
+        self._mainloop_error: Optional[BaseException] = None
+        self._lifecycle = RuntimeHostAdapter(
+            runtime_factory,
+            start_runtime=self._start_runtime,
+            warm_up_runtime=self._wait_until_ready,
+            stop_runtime=self._stop_runtime,
+        )
+
+    @property
+    def state(self) -> RuntimeHostState:
+        return self._lifecycle.state
+
+    @property
+    def runtime(self) -> Optional[RuntimeT]:
+        return self._lifecycle.runtime
+
+    @property
+    def last_error(self) -> Optional[BaseException]:
+        return self._lifecycle.last_error
+
+    @property
+    def stop_thread(self) -> Optional[Thread]:
+        return self._lifecycle.stop_thread
+
+    def start(self) -> RuntimeT:
+        return self._lifecycle.start()
+
+    def run(self) -> None:
+        self.start()
+        mainloop_thread = self._mainloop_thread
+        if mainloop_thread is None:
+            error = RuntimeHostLifecycleError(
+                "headless runtime mainloop was not started"
+            )
+            try:
+                self.stop()
+            except BaseException as cleanup_error:
+                self._add_cleanup_note(error, cleanup_error)
+            raise error
+
+        if mainloop_thread is current_thread():
+            raise RuntimeHostLifecycleError(
+                "cannot join the headless runtime mainloop from its own thread"
+            )
+        mainloop_thread.join()
+        run_error = self._mainloop_error
+        if run_error is not None:
+            try:
+                self.stop()
+            except BaseException as cleanup_error:
+                self._add_cleanup_note(run_error, cleanup_error)
+            raise run_error
+        self.stop()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._lifecycle.stop(timeout=timeout)
+
+    def _start_runtime(self, runtime: RuntimeT) -> None:
+        if self._prepare_runtime is not None:
+            self._prepare_runtime(runtime)
+        self._start_mainloop(runtime)
+        if not self._auto_start_server:
+            return
+        lan = self._lan_controller(runtime)
+        start = getattr(lan, "start", None)
+        if not callable(start):
+            raise RuntimeHostLifecycleError(
+                "headless runtime LAN controller does not provide start()"
+            )
+        start(quiet=True)
+
+    def _start_mainloop(self, runtime: RuntimeT) -> None:
+        mainloop = getattr(runtime, "mainloop", None)
+        if not callable(mainloop):
+            raise RuntimeHostLifecycleError(
+                "headless runtime does not provide mainloop()"
+            )
+
+        def run_mainloop() -> None:
+            self._mainloop_entered.set()
+            try:
+                mainloop()
+            except BaseException as error:
+                self._mainloop_error = error
+
+        mainloop_thread = Thread(
+            target=run_mainloop,
+            name="HeadlessRuntimeMainloop",
+            daemon=True,
+        )
+        self._mainloop_thread = mainloop_thread
+        mainloop_thread.start()
+        if not self._mainloop_entered.wait(timeout=self._server_ready_timeout):
+            raise RuntimeHostLifecycleError(
+                "headless runtime mainloop did not start within its readiness bound"
+            )
+
+        after = getattr(runtime, "after", None)
+        if callable(after):
+            after(0, self._mainloop_ready.set)
+        else:
+            self._mainloop_ready.set()
+        if not self._mainloop_ready.wait(timeout=self._server_ready_timeout):
+            if self._mainloop_error is not None:
+                raise self._mainloop_error
+            raise RuntimeHostLifecycleError(
+                "headless runtime mainloop did not process callbacks within its readiness bound"
+            )
+        if self._mainloop_error is not None:
+            raise self._mainloop_error
+
+    def _wait_until_ready(self, runtime: RuntimeT) -> None:
+        if not self._auto_start_server:
+            return
+        lan = self._lan_controller(runtime)
+        wait_until_ready = getattr(lan, "wait_until_ready", None)
+        if not callable(wait_until_ready):
+            raise RuntimeHostLifecycleError(
+                "headless runtime LAN controller does not provide wait_until_ready()"
+            )
+        wait_until_ready(timeout=self._server_ready_timeout)
+
+    def _stop_runtime(self, runtime: RuntimeT) -> None:
+        cleanup_error: Optional[BaseException] = None
+        lan = getattr(runtime, "_lan", None)
+        stop_server = getattr(lan, "stop", None) if lan is not None else None
+        if callable(stop_server):
+            try:
+                stop_server()
+            except BaseException as error:
+                cleanup_error = error
+
+        join_server = getattr(lan, "join", None) if lan is not None else None
+        if callable(join_server):
+            try:
+                join_server(timeout=self._server_stop_timeout)
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+                else:
+                    self._add_cleanup_note(cleanup_error, error)
+
+        quit_runtime = getattr(runtime, "quit", None)
+        if callable(quit_runtime):
+            try:
+                quit_runtime()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+                else:
+                    self._add_cleanup_note(cleanup_error, error)
+
+        mainloop_thread = self._mainloop_thread
+        if mainloop_thread is not None and mainloop_thread is not current_thread():
+            mainloop_thread.join(timeout=self._server_stop_timeout)
+            if mainloop_thread.is_alive():
+                error = RuntimeHostStopTimeoutError(
+                    "headless runtime mainloop did not stop within "
+                    f"{self._server_stop_timeout:g} seconds"
+                )
+                if cleanup_error is None:
+                    cleanup_error = error
+                else:
+                    self._add_cleanup_note(cleanup_error, error)
+
+        if cleanup_error is not None:
+            raise cleanup_error
+
+    @staticmethod
+    def _lan_controller(runtime: RuntimeT) -> Any:
+        lan = getattr(runtime, "_lan", None)
+        if lan is None:
+            raise RuntimeHostLifecycleError(
+                "headless runtime does not provide a LAN controller"
+            )
+        return lan
+
+    @staticmethod
+    def _add_cleanup_note(
+        primary_error: BaseException,
+        cleanup_error: BaseException,
+    ) -> None:
+        if hasattr(primary_error, "add_note"):
+            primary_error.add_note(
+                "headless runtime cleanup failed with "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+
+
 __all__ = [
+    "HeadlessRuntimeHost",
     "RuntimeHost",
     "RuntimeHostAdapter",
     "RuntimeHostLifecycleError",

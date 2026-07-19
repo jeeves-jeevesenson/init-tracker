@@ -25,9 +25,9 @@ import argparse
 import os
 import signal
 import sys
-from typing import Callable, Optional, Sequence, TypeVar
+from typing import Optional, Sequence
 
-from init_tracker_server.runtime_host import RuntimeHostAdapter
+from init_tracker_server.runtime_host import HeadlessRuntimeHost
 
 from runtime_config import (
     config as runtime_cfg,
@@ -36,9 +36,6 @@ from runtime_config import (
     debugging_env_enabled,
     parse_bool_value,
 )
-
-
-HeadlessRuntimeT = TypeVar("HeadlessRuntimeT")
 
 
 def _force_headless_env() -> None:
@@ -56,30 +53,6 @@ def _override_lan_cfg(app, host: Optional[str], port: Optional[int]) -> None:
         cfg.host = str(host)
     if port is not None:
         cfg.port = int(port)
-
-
-def _shutdown(app) -> None:
-    try:
-        lan = getattr(app, "_lan", None)
-        if lan is not None:
-            lan._polling = False
-            lan.stop()
-    except Exception:
-        pass
-    try:
-        app.quit()
-    except Exception:
-        pass
-
-
-def _build_headless_runtime_host(
-    runtime_factory: Callable[[], HeadlessRuntimeT],
-) -> RuntimeHostAdapter[HeadlessRuntimeT]:
-    return RuntimeHostAdapter(
-        runtime_factory,
-        start_runtime=lambda _runtime: None,
-        stop_runtime=_shutdown,
-    )
 
 
 def _parse_debugging_value(raw: str) -> bool:
@@ -142,12 +115,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # the dummy/headless modules and InitiativeTracker inherits HeadlessRoot.
     import dnd_initative_tracker as tracker_mod
 
-    if args.no_auto_lan:
-        tracker_mod.POC_AUTO_START_LAN = False
+    auto_start_lan = not args.no_auto_lan
+    tracker_mod.POC_AUTO_START_LAN = auto_start_lan
 
-    runtime_host = _build_headless_runtime_host(tracker_mod.InitiativeTracker)
+    runtime_host = HeadlessRuntimeHost(
+        lambda: tracker_mod.InitiativeTracker(auto_start_lan=False),
+        prepare_runtime=lambda current_app: _override_lan_cfg(
+            current_app,
+            args.host,
+            args.port,
+        ),
+        auto_start_server=auto_start_lan,
+    )
     app = runtime_host.start()
-    _override_lan_cfg(app, args.host, args.port)
 
     def _handle_signal(_signum, _frame):
         runtime_host.stop()
@@ -172,11 +152,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sys.stdout.flush()
 
     try:
-        app.mainloop()
+        runtime_host.run()
     except KeyboardInterrupt:
         pass
-    finally:
-        runtime_host.stop()
     return 0
 
 

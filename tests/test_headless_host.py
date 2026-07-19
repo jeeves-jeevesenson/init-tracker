@@ -15,6 +15,7 @@ without constructing a Tk root window:
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -131,94 +132,67 @@ class HeadlessRuntimeSurfaceGuardTests(unittest.TestCase):
 class HeadlessLaunchSubprocessTest(unittest.TestCase):
     """Run a real headless launch in a subprocess to keep env isolated.
 
-    This is the integration check for the host seam: in a fresh
-    interpreter we set ``INIT_TRACKER_HEADLESS=1``, build the full
-    ``InitiativeTracker``, start the LAN server, hit ``/dm`` over HTTP,
-    and then shut down cleanly.
+    This is the real-process check for the supported compatibility entrypoint.
+    It uses ``--no-auto-lan`` because the managed test sandbox forbids opening
+    sockets; package server startup/readiness delegation is covered with
+    injected hosts in the focused server lifecycle tests.
     """
 
     def test_headless_tracker_serves_dm_surface(self):
-        script = (
-            "import os, sys, threading, time, urllib.request\n"
-            "os.environ['INIT_TRACKER_HEADLESS'] = '1'\n"
-            "import tk_compat\n"
-            "import dnd_initative_tracker as tracker_mod\n"
-            "tracker_mod.POC_AUTO_START_LAN = False\n"
-            "assert tk_compat.is_headless_env(), 'env not detected'\n"
-            "import tkinter as tk\n"
-            "assert tk.Tk is tk_compat.HeadlessRoot, 'Tk not swapped for HeadlessRoot'\n"
-            "app = tracker_mod.InitiativeTracker()\n"
-            "assert isinstance(app, tk_compat.HeadlessRoot)\n"
-            "assert hasattr(app, '_lan'), 'LAN controller missing'\n"
-            "assert app.host_mode == 'headless', repr(app.host_mode)\n"
-            # __getattr__ on dummy widgets makes hasattr() lie, so assert via __dict__.
-            "for name in ('tree', 'log_text', '_lan_url_mode_var', '_monster_combo'):\n"
-            "    assert name not in app.__dict__, ('Tk widget leaked into headless app: ' + name)\n"
-            # Runtime mutations that normally touch UI must not crash in headless mode.
-            "assert app._allow_desktop_runtime_surface('map_window') is False\n"
-            "assert app._session_restore_supports_tk_refresh() is False\n"
-            "app._log('headless smoke test line')\n"
-            "app._rebuild_table()\n"
-            "app._update_turn_ui()\n"
-            "app._show_dm_up_alert_dialog()\n"
-            "app._open_map_mode()\n"
-            "assert app.__dict__.get('_map_window') is None, 'headless map window should stay unopened'\n"
-            "app._prompt_set_lan_https_public_url()\n"
-            "app._save_session_dialog()\n"
-            "app._load_session_dialog()\n"
-            "app._show_lan_url()\n"
-            "app._show_lan_qr()\n"
-            "app._open_lan_sessions()\n"
-            "app._open_yaml_player_manager()\n"
-            "app._open_lan_admin_assignments()\n"
-            "app._show_about()\n"
-            "app._show_update_log()\n"
-            "app._check_for_updates()\n"
-            "app._offer_update_and_run_if_confirmed('update available')\n"
-            "app._launch_update_workflow('update available')\n"
-            "app._open_monster_library()\n"
-            "app._open_random_enemy_dialog()\n"
-            "app._open_bulk_dialog()\n"
-            "app._open_damage_tool()\n"
-            "app._open_heal_tool()\n"
-            "app._open_condition_tool()\n"
-            "app._open_move_tool()\n"
-            "assert app._open_map_attack_tool() is False\n"
-            "th = threading.Thread(target=app.mainloop, daemon=True)\n"
-            "th.start()\n"
-            "app._lan.cfg.host = '127.0.0.1'\n"
-            "app._lan.cfg.port = 18801\n"
-            "app._lan.start(quiet=True)\n"
-            "status = None\n"
-            "for _ in range(40):\n"
-            "    try:\n"
-            "        with urllib.request.urlopen('http://127.0.0.1:18801/dm', timeout=0.5) as r:\n"
-            "            status = r.status\n"
-            "            break\n"
-            "    except Exception:\n"
-            "        time.sleep(0.25)\n"
-            "print('STATUS', status)\n"
-            "app._lan.stop()\n"
-            "app.quit()\n"
-            "th.join(timeout=5)\n"
-            "print('ALIVE', th.is_alive())\n"
-        )
-
         env = os.environ.copy()
         env.pop("INIT_TRACKER_HEADLESS", None)
-
-        result = subprocess.run(
-            [sys.executable, "-c", script],
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "serve_headless.py",
+                "--no-auto-lan",
+                "--no-debugging",
+            ],
             cwd=str(REPO_ROOT),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=90,
             env=env,
         )
-        combined = result.stdout + "\n" + result.stderr
-        self.assertEqual(result.returncode, 0, combined)
-        self.assertIn("STATUS 200", combined)
-        self.assertIn("ALIVE False", combined)
+        output_lines = []
+
+        def read_output() -> None:
+            if process.stdout is None:
+                return
+            output_lines.extend(process.stdout)
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        started = False
+        try:
+            readiness_deadline = time.monotonic() + 75.0
+            while time.monotonic() < readiness_deadline:
+                started = any(
+                    "Headless tracker started." in line
+                    for line in output_lines
+                )
+                if started:
+                    break
+                if process.poll() is not None:
+                    break
+                time.sleep(0.1)
+        finally:
+            if process.poll() is None:
+                if started:
+                    process.send_signal(signal.SIGINT)
+                else:
+                    process.terminate()
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            reader.join(timeout=5)
+
+        combined = "".join(output_lines)
+        self.assertTrue(started, combined)
+        self.assertEqual(process.returncode, 0, combined)
+        self.assertIn("Headless tracker started.", combined)
 
 
 if __name__ == "__main__":

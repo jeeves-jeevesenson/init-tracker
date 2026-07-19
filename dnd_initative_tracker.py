@@ -7910,6 +7910,7 @@ class LanController:
             access_log=False,
             thread_name="InitTrackerLAN",
             on_server_ready=_store_server_host_runtime,
+            ready_check=lambda: bool(self._fastapi_app.state.ready),
         )
         self._server_thread = self._server_host.start()
 
@@ -7921,8 +7922,15 @@ class LanController:
         url = self._best_lan_url()
         self.app._oplog(f"LAN server hoisted at {url}  (open on yer phone, matey)")
 
+    def wait_until_ready(self, timeout: float = 5.0) -> None:
+        server_host = getattr(self, "_server_host", None)
+        if server_host is None:
+            raise RuntimeError("LAN server host has not been started")
+        server_host.wait_until_ready(timeout=timeout)
+
     def stop(self) -> None:
-        # Ask uvicorn to stop
+        # Preserve compatibility: request stop without joining from callbacks.
+        self._polling = False
         server_host = getattr(self, "_server_host", None)
         if server_host is not None:
             server_host.request_stop()
@@ -7932,6 +7940,11 @@ class LanController:
             except Exception:
                 pass
         self.app._oplog("LAN server be lowerin' sails (stoppin').")
+
+    def join(self, timeout: float = 5.0) -> None:
+        server_host = getattr(self, "_server_host", None)
+        if server_host is not None:
+            server_host.wait(timeout=timeout)
 
     def notify_turn_start(self, cid: int, round_num: int, turn_num: int) -> None:
         """Send push notification for the newly active combatant (if subscribed)."""
@@ -11000,7 +11013,7 @@ class InitiativeTracker(base.InitiativeTracker):
 
     """Tk tracker + LAN proof-of-concept server."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, auto_start_lan: Optional[bool] = None) -> None:
         _archive_startup_time_log()
         _archive_startup_logs()
         super().__init__()
@@ -11111,7 +11124,12 @@ class InitiativeTracker(base.InitiativeTracker):
         # Start quietly (log on success; avoid popups if deps missing)
         self.after(0, self._auto_load_quick_save_on_startup)
         self.after(600, self._check_for_updates_on_startup)
-        if POC_AUTO_START_LAN:
+        should_auto_start_lan = (
+            POC_AUTO_START_LAN
+            if auto_start_lan is None
+            else bool(auto_start_lan)
+        )
+        if should_auto_start_lan:
             self.after(250, lambda: self._lan.start(quiet=True))
 
     def _open_combatant_stat_block(self, c: base.Combatant) -> None:

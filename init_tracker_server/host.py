@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import math
 import threading
+import time
 from typing import Any, Callable, Optional
 
 
 ServerReadyCallback = Callable[[asyncio.AbstractEventLoop, Any], None]
+ServerReadinessCheck = Callable[[], bool]
 
 
 class UvicornServerHostError(RuntimeError):
@@ -34,6 +36,7 @@ class UvicornServerHost:
         access_log: bool = False,
         thread_name: str = "InitTrackerLAN",
         on_server_ready: Optional[ServerReadyCallback] = None,
+        ready_check: Optional[ServerReadinessCheck] = None,
     ) -> None:
         self.app = app
         self.host = host
@@ -42,6 +45,7 @@ class UvicornServerHost:
         self.access_log = access_log
         self.thread_name = thread_name
         self._on_server_ready = on_server_ready
+        self._ready_check = ready_check
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._server: Optional[Any] = None
         self._thread: Optional[threading.Thread] = None
@@ -50,6 +54,7 @@ class UvicornServerHost:
         self._stop_signal_delivered = False
         self._runtime_error: Optional[BaseException] = None
         self._wait_error: Optional[BaseException] = None
+        self._worker_finished = threading.Event()
 
     @property
     def loop(self) -> Optional[asyncio.AbstractEventLoop]:
@@ -109,6 +114,8 @@ class UvicornServerHost:
                 except BaseException as runtime_error:
                     with self._lock:
                         self._runtime_error = runtime_error
+                finally:
+                    self._worker_finished.set()
 
             thread = threading.Thread(
                 target=run_server,
@@ -118,6 +125,67 @@ class UvicornServerHost:
             self._thread = thread
             thread.start()
             return thread
+
+    def wait_until_ready(self, timeout: float) -> None:
+        """Wait until the registered ASGI lifespan publishes readiness."""
+        timeout = self._validate_timeout(timeout)
+        ready_check = self._ready_check
+        if ready_check is None:
+            error = UvicornServerHostError(
+                "Uvicorn server readiness is not configured"
+            )
+            with self._lock:
+                self._wait_error = error
+            raise error
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                if ready_check():
+                    return
+            except BaseException as readiness_error:
+                error = UvicornServerHostRuntimeError(
+                    "Uvicorn server readiness check failed"
+                )
+                with self._lock:
+                    self._wait_error = error
+                raise error from readiness_error
+
+            with self._lock:
+                thread = self._thread
+                runtime_error = self._runtime_error
+
+            if runtime_error is not None:
+                error = UvicornServerHostRuntimeError(
+                    "Uvicorn worker failed before readiness"
+                )
+                with self._lock:
+                    self._wait_error = error
+                raise error from runtime_error
+            if thread is None:
+                error = UvicornServerHostError(
+                    "Uvicorn worker has not been started"
+                )
+                with self._lock:
+                    self._wait_error = error
+                raise error
+            if self._worker_finished.is_set():
+                error = UvicornServerHostRuntimeError(
+                    "Uvicorn worker stopped before readiness"
+                )
+                with self._lock:
+                    self._wait_error = error
+                raise error
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error = UvicornServerHostTimeoutError(
+                    f"Uvicorn server did not become ready within {timeout:g} seconds"
+                )
+                with self._lock:
+                    self._wait_error = error
+                raise error
+            time.sleep(min(remaining, 0.05))
 
     def request_stop(self) -> bool:
         """Latch and deliver the server stop signal at most once."""
