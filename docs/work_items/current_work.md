@@ -8,11 +8,11 @@ If an item is not marked as **Active** here, it is NOT current work.
 ## Current Status
 
 <!-- ACTIVE_WORK_STATUS_START -->
-- **Status:** Completed
-- **Current Work Item:** `WORK-20260715-a7-browser-automation`
-- **Active Gate:** A7-AUTO
-- **Allowed Next Action:** None under A7-AUTO. The black-tan three-surface browser workflow completed successfully; all implementation, test, browser, runtime, and network authorizations are closed. Push, deployment, restart, scheduler, production, and service mutation remain closed.
-- <!-- ACTIVE_WORK_STATUS_END -->
+- **Status:** No Active Work
+- **Current Work Item:** None
+- **Active Gate:** None
+- **Allowed Next Action:** A separately authorized planning and deep-research pass may evaluate the current repository and propose the next milestone. No application implementation, campaign, smoke, deploy, restart, or production work is active.
+<!-- ACTIVE_WORK_STATUS_END -->
 
 ---
 
@@ -21,8 +21,39 @@ If an item is not marked as **Active** here, it is NOT current work.
 | ID | Title | Status | Goal |
 | --- | --- | --- | --- |
 <!-- ACTIVE_WORK_TABLE_START -->
-| WORK-20260715-a7-browser-automation | A7 browser-driven human-workflow automation | Completed | A7-AUTO corrected summon advancement and completed the 84-step black-tan three-surface browser workflow. |
+<!-- No active work items. -->
 <!-- ACTIVE_WORK_TABLE_END -->
+
+## ASGI Runtime Lifecycle Ownership Milestone Closure
+
+`MILESTONE-20260718-asgi-runtime-lifecycle-ownership` is completed and
+independently audited.
+
+- Campaign: `campaign-20260718-asgi-runtime-lifecycle-ownership-01`
+- Final authoritative revision: `57`
+- Campaign result: `milestone_completed`
+- Product checkpoints: `10`
+- Final implementation commit: `5ad8beb375dec7211b681ce69b64c88c78268216`
+- Independent audit commit: `8794e100e23f2d9ced838b4ee31c3e6849f4bc08`
+- Audit verdict: `PASS` — 17 passed, 0 failed, 0 inconclusive
+- Focused validation: 157 tests and 56 subtests passed
+- Campaign process: not running
+- Remaining campaign capacity: 0
+- Current authorization: none
+
+Durable closure:
+
+[completed/WORK-20260719-asgi-runtime-lifecycle-ownership-closure.md](completed/WORK-20260719-asgi-runtime-lifecycle-ownership-closure.md)
+
+Independent audit:
+
+[../planning/living_docs/asgi_runtime_lifecycle_ownership_completion_audit_20260719.md](../planning/living_docs/asgi_runtime_lifecycle_ownership_completion_audit_20260719.md)
+
+This completion is limited to ASGI-owned authoritative runtime lifecycle. It
+does not declare route ownership, WebSocket ownership, public asynchronous
+command lifecycle, snapshot/cache ownership, process isolation, deployment, or
+production readiness complete.
+
 
 ## A7-AUTO Autonomous Completion
 
@@ -782,7 +813,7 @@ In the absence of an active work item, the Orchestrator MUST stop and ask the de
 5. Commit/Push current changes.
 6. Deploy to production.
 
-Allowed Next Action: open `WORK-20260708-dm-console-combat-route-request-overlap-planning-checkpoint` as a narrow planning/evidence checkpoint to investigate route/request serialization, thread coordination, or scheduling overlap; Orchestrator/developer deploy-prep review using the completed `WORK-20260701-app-host-runtime-lifecycle-deploy-guidance-checkpoint`; pause/no further migration for now; or open a separate deferred bug-capture item if the small smoke bug remains relevant. Do not move routes, route bodies, route registration, payloads, cache ownership, resource-pools behavior, queue behavior, WebSocket behavior, auth/claims/reconnect behavior, launch commands, lifespan behavior, shutdown semantics, production topology, deploy, or start direct DM-console/read-model, broad snapshot/LAN/resource-pools, service-internal, or startup-static-fields latency implementation without explicit developer authorization, a new active work item where required, and supporting evidence.
+Allowed Next Action: begin a separately authorized planning and deep-research pass to select the next milestone. No application implementation, campaign, gate, bug fix, smoke, deploy, restart, or production work is active.
 
 ## Recent completion
 
